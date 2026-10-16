@@ -1,0 +1,31 @@
+# Overrides for entity/config.py — anything omitted uses the defaults there.
+
+[model]
+name = "qwen3.6:35b-a3b"
+num_ctx = 16384
+think = true
+options = { temperature = 0.7, top_p = 0.95 }
+
+[loop]
+turn_delay = 0.0           # seconds between turns
+extract_every_steps = 8    # extract mid-turn after this many tool-calling steps
+
+[rot]
+trigger = 0.6              # start cutting at 60% of num_ctx...
+target = 0.45              # ...and cut back down to 45%
+hard = 0.85                # drop whole oldest messages beyond this
+protect_recent = 4         # newest messages are never cut
+bias = 4.0                 # how strongly cuts prefer older text
+cut_min = 8                # chars per cut
+cut_max = 160
+notice = true              # prepend a tally of fully-destroyed history
+
+[memory]
+embed_model = "qwen3-embedding:0.6b"
+inject_relevant = 6        # memories surfaced per heartbeat by relevance...
+inject_recent = 3          # ...plus the most recent few
+
+[dream]
+every_turns = 5            # turns between dreams; low for testing, 0 disables
+memory_count = 8           # random memories used as dream material
+temperature = 1.0
