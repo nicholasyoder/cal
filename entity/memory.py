@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import ollama
 
+from .backend import Backend
 from .config import Config
 
 QUERY_INSTRUCT = "Instruct: Given an agent's current situation, retrieve its relevant memories\nQuery: "
@@ -30,9 +31,10 @@ class Memory:
 
 
 class MemoryStore:
-    def __init__(self, cfg: Config, client: ollama.Client):
+    def __init__(self, cfg: Config):
         self.cfg = cfg.memory
-        self.client = client
+        # Embeddings always go to a local Ollama server, independent of `model.provider`.
+        self.client = ollama.Client(host=cfg.memory.embed_host)
         self.path = cfg.data_dir / "memories.jsonl"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.items: list[Memory] = []
@@ -112,9 +114,9 @@ EXTRACT_SCHEMA = {
 
 
 class Extractor:
-    def __init__(self, cfg: Config, client: ollama.Client, store: MemoryStore, prompt: str):
+    def __init__(self, cfg: Config, backend: Backend, store: MemoryStore, prompt: str):
         self.cfg = cfg
-        self.client = client
+        self.backend = backend
         self.store = store
         self.prompt = prompt
 
@@ -125,7 +127,7 @@ class Extractor:
         transcript = transcript[-budget:]
         existing = self.store.search(transcript, 12)
         existing_txt = "\n".join(f"- {m.text}" for m in existing) or "(none)"
-        r = self.client.chat(
+        r = self.backend.chat(
             model=self.cfg.memory.extract_model or self.cfg.model.name,
             messages=[
                 {"role": "system", "content": self.prompt},
@@ -133,10 +135,11 @@ class Extractor:
             ],
             format=EXTRACT_SCHEMA,
             think=self.cfg.memory.extract_think,
-            options={**self.cfg.model.options, "num_ctx": self.cfg.model.num_ctx, "temperature": 0.2},
+            num_ctx=self.cfg.model.num_ctx,
+            options={**self.cfg.model.options, "temperature": 0.2},
         )
         try:
-            items = json.loads(r.message.content)["memories"]
+            items = json.loads(r.content)["memories"]
         except (json.JSONDecodeError, KeyError, TypeError):
             return [], []
         stored, skipped = [], []

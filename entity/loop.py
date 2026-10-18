@@ -9,8 +9,8 @@ import time
 from datetime import datetime
 
 import httpx
-import ollama
 
+from .backend import BackendError, make_backend
 from .config import Config
 from .context import Context
 from .log import CYAN, DIM, GREEN, MAGENTA, RED, YELLOW, RunLog
@@ -23,16 +23,18 @@ EXTRACT_RESULT_CHARS = 1500
 class Agent:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.client = ollama.Client(host=cfg.model.host)
+        self.backend = make_backend(cfg.model)
         self.log = RunLog(cfg.runs_dir)
-        self.memory = MemoryStore(cfg, self.client)
+        self.memory = MemoryStore(cfg)
         self.tools = Toolbox(cfg, self.memory)
         prompts = cfg.prompts_dir
         self.heartbeat_tpl = (prompts / "heartbeat.md").read_text()
         self.dream_tpl = (prompts / "dream.md").read_text()
-        self.extractor = Extractor(cfg, self.client, self.memory, (prompts / "extract.md").read_text())
+        self.extractor = Extractor(cfg, self.backend, self.memory, (prompts / "extract.md").read_text())
+        self.system_tpl = (prompts / "system.md").read_text()
+        self.soul_path = cfg.workspace / cfg.loop.soul_file
         self.ctx = Context(
-            (prompts / "system.md").read_text(), cfg.rot, cfg.model.num_ctx,
+            self._system_text(), cfg.rot, cfg.model.num_ctx,
             tool_schema_chars=len(json.dumps(self.tools.schemas)),
         )
         self.pending: list[str] = []
@@ -75,27 +77,27 @@ class Agent:
         mems = self.memory.sample(self.cfg.dream.memory_count)
         mem_txt = "\n".join(f"- {m.render()}" for m in mems) or "(nothing surfaces)"
         try:
-            r = self.client.chat(
+            r = self.backend.chat(
                 model=self.cfg.model.name,
                 messages=[
                     {"role": "system", "content": self.dream_tpl},
                     {"role": "user", "content": f"Fragments surfacing:\n{mem_txt}"},
                 ],
                 think=self.cfg.dream.think,
-                options={**self.cfg.model.options, "num_ctx": self.cfg.model.num_ctx,
-                        "temperature": self.cfg.dream.temperature},
+                num_ctx=self.cfg.model.num_ctx,
+                options={**self.cfg.model.options, "temperature": self.cfg.dream.temperature},
             )
-        except (ollama.ResponseError, httpx.HTTPError, ConnectionError) as e:
+        except (BackendError, httpx.HTTPError, ConnectionError) as e:
             self.log.event("error", step=self.step, error=f"dream: {e}")
             self.log.line(f"\n[dream failed: {e}]", RED)
             return
-        text = (r.message.content or "").strip()
+        text = (r.content or "").strip()
         if not text:
             return
         labeled = f"[dream — turn {self.turn}]\n{text}\n[/dream]"
         self.ctx.add({"role": "user", "content": labeled})
         self.log.event("dream", turn=self.turn, step=self.step, memories=[m.id for m in mems],
-                       thinking=r.message.thinking, content=text)
+                       thinking=r.thinking, content=text)
         self.log.line(f"\n~~ dream · turn {self.turn} ~~\n{text}\n", MAGENTA)
 
     def _heartbeat(self):
@@ -115,7 +117,7 @@ class Agent:
         self.step += 1
         try:
             thinking, content, calls, stats = self._chat()
-        except (ollama.ResponseError, httpx.HTTPError, ConnectionError) as e:
+        except (BackendError, httpx.HTTPError, ConnectionError) as e:
             self.log.event("error", step=self.step, error=str(e))
             self.log.line(f"\n[model error: {e}] retrying", RED)
             time.sleep(3)
@@ -146,7 +148,8 @@ class Agent:
             if len(result) > self.cfg.loop.tool_result_max_chars:
                 result = result[:self.cfg.loop.tool_result_max_chars] + "\n[... truncated]"
             self.log.line(_short(result, 500), DIM)
-            self.ctx.add({"role": "tool", "content": result, "tool_name": name})
+            self.ctx.add({"role": "tool", "content": result, "tool_name": name,
+                         "tool_call_id": call.get("id")})
             self.log.event("tool", step=self.step, name=name, args=args, result=result)
             self.pending.append(f"[tool call] {name}({json.dumps(args, ensure_ascii=False)})\n"
                                 f"[result]\n{_short(result, EXTRACT_RESULT_CHARS)}")
@@ -169,40 +172,46 @@ class Agent:
                           f"{rot['destroyed_span_s'] / 60:.0f}m span]", MAGENTA)
         self.log.snapshot(self.ctx.render())
 
+    def _system_text(self) -> str:
+        soul = ""
+        if self.soul_path.is_file():
+            soul = self.soul_path.read_text(errors="replace").strip()
+        if not soul:
+            return self.system_tpl
+        return f"{self.system_tpl}\n\n# {self.cfg.loop.soul_file} (written by you; always in context, never rots)\n{soul}"
+
     def _chat(self):
+        self.ctx.system = self._system_text()
         thinking, content, calls, final = [], [], [], None
         mode = None
-        stream = self.client.chat(
+        stream = self.backend.chat_stream(
             model=self.cfg.model.name,
             messages=self.ctx.render(),
             tools=self.tools.schemas,
             think=self.cfg.model.think,
-            stream=True,
-            options={**self.cfg.model.options, "num_ctx": self.cfg.model.num_ctx},
+            num_ctx=self.cfg.model.num_ctx,
+            options=self.cfg.model.options,
         )
         for chunk in stream:
-            m = chunk.message
-            if m.thinking:
+            if chunk.thinking:
                 if mode != "think":
                     self.log.stream("\n", DIM)
                     mode = "think"
-                thinking.append(m.thinking)
-                self.log.stream(m.thinking, DIM)
-            if m.content:
+                thinking.append(chunk.thinking)
+                self.log.stream(chunk.thinking, DIM)
+            if chunk.content:
                 if mode != "say":
                     self.log.stream("\n")
                     mode = "say"
-                content.append(m.content)
-                self.log.stream(m.content)
-            for tc in m.tool_calls or []:
-                calls.append({"function": {"name": tc.function.name,
-                                           "arguments": dict(tc.function.arguments or {})}})
+                content.append(chunk.content)
+                self.log.stream(chunk.content)
+            calls.extend(chunk.tool_calls)
             if chunk.done:
                 final = chunk
         stats = {}
         if final is not None:
-            stats = {"prompt_tokens": final.prompt_eval_count, "output_tokens": final.eval_count,
-                     "duration_s": (final.total_duration or 0) / 1e9,
+            stats = {"prompt_tokens": final.prompt_tokens, "output_tokens": final.output_tokens,
+                     "duration_s": final.duration_s,
                      "est_context_tokens": self.ctx.est_tokens()}
         return "".join(thinking), "".join(content), calls, stats
 
@@ -215,7 +224,7 @@ class Agent:
         self.log.line("\n[extracting memories…]", DIM)
         try:
             stored, skipped = self.extractor.extract(transcript, self.log.run_id, self.step)
-        except (ollama.ResponseError, httpx.HTTPError, ConnectionError) as e:
+        except (BackendError, httpx.HTTPError, ConnectionError) as e:
             self.log.event("error", step=self.step, error=f"extraction: {e}")
             self.log.line(f"[extraction failed: {e}]", RED)
             return

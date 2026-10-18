@@ -8,10 +8,23 @@ from pathlib import Path
 @dataclass
 class ModelCfg:
     name: str = "gpt-oss:latest"
+    # "ollama" talks to a native Ollama server; "openai" talks to any OpenAI-compatible
+    # chat-completions endpoint (NanoGPT, OpenRouter, vLLM, LM Studio, ...).
+    provider: str = "ollama"
+    # Ollama: the server host. OpenAI-compatible: the API base URL, e.g.
+    # "https://nano-gpt.com/api/v1".
     host: str = "http://localhost:11434"
+    # OpenAI-compatible only: name of the environment variable holding the API key.
+    # Leave empty for a local/keyless endpoint.
+    api_key_env: str = ""
     num_ctx: int = 16384
     think: bool = True
-    # Passed straight through to Ollama's `options`.
+    # OpenAI-compatible only: passed as `reasoning_effort` when `think` is true, for
+    # providers/models that gate reasoning behind it (e.g. "low"/"medium"/"high"). Leave
+    # empty to send nothing and let the model's own default apply.
+    reasoning_effort: str = ""
+    # Passed straight through to Ollama's `options`; for an OpenAI-compatible provider only
+    # `temperature` and `top_p` are used (everything else is Ollama-specific and ignored).
     options: dict = field(default_factory=lambda: {"temperature": 0.7, "top_p": 0.95})
 
 
@@ -27,6 +40,9 @@ class LoopCfg:
     # history (Ollama otherwise drops `thinking` once a turn is done) and gets cut/recalled
     # like everything else instead of vanishing the instant the turn ends.
     keep_thinking: bool = True
+    # Workspace file (edited by the agent with its normal file tools) whose contents are
+    # always appended to the system prompt, immune to rot — a standing note to itself.
+    soul_file: str = "SOUL.md"
 
 
 @dataclass
@@ -56,10 +72,13 @@ class RotCfg:
 
 @dataclass
 class MemoryCfg:
+    # Embeddings always run on a local Ollama server, regardless of `model.provider` — this
+    # keeps the vector store self-consistent even when chat is offloaded to a hosted model.
+    embed_host: str = "http://localhost:11434"
     embed_model: str = "qwen3-embedding:0.6b"
     # Run the embedder on CPU so it doesn't evict the main model from VRAM.
     embed_on_cpu: bool = True
-    # Model used for extraction; empty means the main model.
+    # Model used for extraction; empty means the main model. Runs on `model.provider`.
     extract_model: str = ""
     extract_think: bool = False
     # Memories surfaced in each heartbeat: top-k by relevance plus the most recent few.
