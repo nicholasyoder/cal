@@ -1,5 +1,5 @@
 [project]
-name = "entity"
+name = "cal"
 version = "0.1.0"
 description = "A continuously running local LLM agent for experimenting with loops and memory"
 requires-python = ">=3.12"

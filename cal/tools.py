@@ -161,7 +161,7 @@ class Toolbox:
             url: The http(s) URL to fetch.
         """
         with httpx.Client(timeout=self.cfg.fetch_timeout, follow_redirects=False,
-                          headers={"User-Agent": "Mozilla/5.0 (entity research agent)"}) as client:
+                          headers={"User-Agent": "Mozilla/5.0 (CAL research agent)"}) as client:
             for _ in range(6):
                 _check_public(url)
                 r = client.get(url)

@@ -4,7 +4,7 @@ from pathlib import Path
 from .config import load_config
 from .loop import Agent
 
-parser = argparse.ArgumentParser(prog="entity")
+parser = argparse.ArgumentParser(prog="cal")
 parser.add_argument("-c", "--config", type=Path, default=Path("config.toml"))
 parser.add_argument(
     "-b", "--base-dir", type=Path, default=None,

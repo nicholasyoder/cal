@@ -1,8 +1,8 @@
-# entity
+# CAL (Continuous Agentic Loop)
 
 A continuously running local LLM agent for experimenting with loops and memory.
 
-There's no user and no prompts — `entity` runs on its own heartbeat, driven by a local
+There's no user and no prompts — `CAL` runs on its own heartbeat, driven by a local
 [Ollama](https://ollama.com) model (or, with a config change, any OpenAI-compatible hosted
 endpoint — see below). Each tick it decides for itself whether to act: read or write files
 in its workspace, search and fetch pages from the web, or just wait. Older context fades and
@@ -24,14 +24,14 @@ ollama pull qwen3-embedding:0.6b
 
 ```bash
 uv sync
-uv run python -m entity
+uv run python -m cal
 ```
 
 By default it loads `config.toml` from the current directory. Pass `-c/--config` to use a
 different file:
 
 ```bash
-uv run python -m entity -c path/to/config.toml
+uv run python -m cal -c path/to/config.toml
 ```
 
 The agent's workspace, memory, and run logs live under `workspace/`, `data/`, and `runs/`
@@ -53,4 +53,4 @@ api_key_env = "NANOGPT_API_KEY"        # name of the env var holding the key
 ```
 
 Export the key before running (`export NANOGPT_API_KEY=...`) rather than putting it in the
-config file. See `entity/config.py`'s `ModelCfg` for the full set of options.
+config file. See `cal/config.py`'s `ModelCfg` for the full set of options.

@@ -13,7 +13,7 @@ import httpx
 from .backend import BackendError, make_backend
 from .config import Config
 from .context import Context
-from .log import CYAN, DIM, GREEN, MAGENTA, RED, YELLOW, RunLog
+from .log import BLUE, CYAN, DIM, GREEN, MAGENTA, RED, YELLOW, RunLog
 from .memory import Extractor, MemoryStore
 from .tools import Toolbox
 
@@ -30,6 +30,7 @@ class Agent:
         prompts = cfg.prompts_dir
         self.heartbeat_tpl = (prompts / "heartbeat.md").read_text()
         self.dream_tpl = (prompts / "dream.md").read_text()
+        self.subconscious_tpl = (prompts / "subconscious.md").read_text()
         self.extractor = Extractor(cfg, self.backend, self.memory, (prompts / "extract.md").read_text())
         self.system_tpl = (prompts / "system.md").read_text()
         self.soul_path = cfg.workspace / cfg.loop.soul_file
@@ -53,7 +54,7 @@ class Agent:
         except KeyboardInterrupt:
             self.log.line("\ninterrupted — extracting pending memories before exit (Ctrl+C again to skip)", YELLOW)
             try:
-                self._extract()
+                self._extract(subconscious=False)
             except KeyboardInterrupt:
                 pass
             self.log.event("run_end", step=self.step)
@@ -215,7 +216,7 @@ class Agent:
                      "est_context_tokens": self.ctx.est_tokens()}
         return "".join(thinking), "".join(content), calls, stats
 
-    def _extract(self):
+    def _extract(self, subconscious: bool = True):
         self.steps_since_extract = 0
         if not self.pending:
             return
@@ -227,13 +228,44 @@ class Agent:
         except (BackendError, httpx.HTTPError, ConnectionError) as e:
             self.log.event("error", step=self.step, error=f"extraction: {e}")
             self.log.line(f"[extraction failed: {e}]", RED)
+        else:
+            self.log.event("extract", step=self.step, transcript_chars=len(transcript),
+                           stored=[m.__dict__ for m in stored], skipped=skipped)
+            for m in stored:
+                self.log.line(f"  + {m.text}", GREEN)
+            if skipped:
+                self.log.line(f"  ({len(skipped)} duplicates skipped)", DIM)
+        if subconscious and self.cfg.subconscious.enabled:
+            self._subconscious(transcript)
+
+    def _subconscious(self, transcript: str):
+        mems = self.memory.sample(self.cfg.subconscious.memory_count)
+        mem_txt = "\n".join(f"- {m.render()}" for m in mems) or "(nothing)"
+        budget = int(self.cfg.model.num_ctx * self.cfg.rot.chars_per_token * 0.3)
+        try:
+            r = self.backend.chat(
+                model=self.cfg.subconscious.model or self.cfg.model.name,
+                messages=[
+                    {"role": "system", "content": self.subconscious_tpl},
+                    {"role": "user", "content": f"Recent activity:\n{transcript[-budget:]}\n\n"
+                                                f"Fragments drifting up:\n{mem_txt}"},
+                ],
+                think=self.cfg.subconscious.think,
+                num_ctx=self.cfg.model.num_ctx,
+                options={**self.cfg.model.options, "temperature": self.cfg.subconscious.temperature},
+            )
+        except (BackendError, httpx.HTTPError, ConnectionError) as e:
+            self.log.event("error", step=self.step, error=f"subconscious: {e}")
+            self.log.line(f"\n[subconscious failed: {e}]", RED)
             return
-        self.log.event("extract", step=self.step, transcript_chars=len(transcript),
-                       stored=[m.__dict__ for m in stored], skipped=skipped)
-        for m in stored:
-            self.log.line(f"  + {m.text}", GREEN)
-        if skipped:
-            self.log.line(f"  ({len(skipped)} duplicates skipped)", DIM)
+        text = (r.content or "").strip()
+        if not text:
+            return
+        labeled = f"[subconscious]\n{text}\n[/subconscious]"
+        self.ctx.add({"role": "user", "content": labeled})
+        self.log.event("subconscious", turn=self.turn, step=self.step, memories=[m.id for m in mems],
+                       thinking=r.thinking, content=text)
+        self.log.line(f"\n~~ subconscious ~~\n{text}\n", BLUE)
 
 
 def _short(s: str, n: int) -> str:

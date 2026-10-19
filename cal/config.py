@@ -100,6 +100,19 @@ class DreamCfg:
 
 
 @dataclass
+class SubconsciousCfg:
+    enabled: bool = True
+    # Empty means the main model; can be pointed at something else (e.g. a cheaper model,
+    # like `memory.extract_model`) independently of it.
+    model: str = ""
+    think: bool = False
+    temperature: float = 0.9
+    # A couple of random memories tossed in alongside the transcript, dream-style, so it has
+    # something unrelated to redirect toward if the agent's gone narrow.
+    memory_count: int = 2
+
+
+@dataclass
 class ToolsCfg:
     fetch_max_chars: int = 10000
     fetch_timeout: float = 20.0
@@ -113,6 +126,7 @@ class Config:
     rot: RotCfg = field(default_factory=RotCfg)
     memory: MemoryCfg = field(default_factory=MemoryCfg)
     dream: DreamCfg = field(default_factory=DreamCfg)
+    subconscious: SubconsciousCfg = field(default_factory=SubconsciousCfg)
     tools: ToolsCfg = field(default_factory=ToolsCfg)
     root: Path = Path(".")
     # Where workspace/data/runs live for this run; defaults to `root` but can point
